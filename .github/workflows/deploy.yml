@@ -20,9 +20,7 @@ jobs:
       ECS_CLUSTER: aircraft-maintenance
       BACKEND_SERVICE: aircraft-maintenance-backend
       FRONTEND_SERVICE: aircraft-maintenance-frontend
-      BACKEND_CONTAINER: maintenance-backend
-      FRONTEND_CONTAINER: maintenance-frontend
-
+  
     steps:
 
       - name: Checkout Repository
