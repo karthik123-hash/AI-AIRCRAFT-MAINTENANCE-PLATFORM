@@ -20,7 +20,7 @@ jobs:
       ECS_CLUSTER: aircraft-maintenance
       BACKEND_SERVICE: aircraft-maintenance-backend
       FRONTEND_SERVICE: aircraft-maintenance-frontend
-  
+
     steps:
 
       - name: Checkout Repository
@@ -58,6 +58,7 @@ jobs:
           echo "image=$FRONTEND_IMAGE:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Download Task Definitions
+        id: task-defs
         run: |
           BACKEND_TD=$(aws ecs describe-services \
             --cluster $ECS_CLUSTER \
@@ -75,17 +76,15 @@ jobs:
           aws ecs describe-task-definition \
             --task-definition $FRONTEND_TD \
             --query taskDefinition > frontend-task-def.json
-          echo "Backend containers:"
-          jq -r '.containerDefinitions[].name' backend-task-def.json
-          echo "Frontend containers:"
-          jq -r '.containerDefinitions[].name' frontend-task-def.json
+          echo "backend_container=$(jq -r '.containerDefinitions[0].name' backend-task-def.json)" >> $GITHUB_OUTPUT
+          echo "frontend_container=$(jq -r '.containerDefinitions[0].name' frontend-task-def.json)" >> $GITHUB_OUTPUT
 
       - name: Render Backend Task Definition
         id: backend-task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: backend-task-def.json
-          container-name: ${{ env.BACKEND_CONTAINER }}
+          container-name: ${{ steps.task-defs.outputs.backend_container }}
           image: ${{ steps.backend-image.outputs.image }}
 
       - name: Render Frontend Task Definition
@@ -93,7 +92,7 @@ jobs:
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: frontend-task-def.json
-          container-name: ${{ env.FRONTEND_CONTAINER }}
+          container-name: ${{ steps.task-defs.outputs.frontend_container }}
           image: ${{ steps.frontend-image.outputs.image }}
 
       - name: Deploy Backend to ECS Fargate
