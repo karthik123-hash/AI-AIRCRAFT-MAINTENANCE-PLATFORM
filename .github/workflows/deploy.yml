@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
 
@@ -19,8 +20,6 @@ jobs:
       ECS_CLUSTER: aircraft-maintenance
       BACKEND_SERVICE: aircraft-maintenance-backend
       FRONTEND_SERVICE: aircraft-maintenance-frontend
-      BACKEND_TASK_FAMILY: aircraft-maintenance-backend
-      FRONTEND_TASK_FAMILY: aircraft-maintenance-frontend
       BACKEND_CONTAINER: maintenance-backend
       FRONTEND_CONTAINER: maintenance-frontend
 
@@ -62,12 +61,26 @@ jobs:
 
       - name: Download Task Definitions
         run: |
+          BACKEND_TD=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $BACKEND_SERVICE \
+            --query "services[0].taskDefinition" \
+            --output text)
+          FRONTEND_TD=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $FRONTEND_SERVICE \
+            --query "services[0].taskDefinition" \
+            --output text)
           aws ecs describe-task-definition \
-            --task-definition $BACKEND_TASK_FAMILY \
+            --task-definition $BACKEND_TD \
             --query taskDefinition > backend-task-def.json
           aws ecs describe-task-definition \
-            --task-definition $FRONTEND_TASK_FAMILY \
+            --task-definition $FRONTEND_TD \
             --query taskDefinition > frontend-task-def.json
+          echo "Backend containers:"
+          jq -r '.containerDefinitions[].name' backend-task-def.json
+          echo "Frontend containers:"
+          jq -r '.containerDefinitions[].name' frontend-task-def.json
 
       - name: Render Backend Task Definition
         id: backend-task-def
