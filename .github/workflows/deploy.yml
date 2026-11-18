@@ -13,156 +13,98 @@ jobs:
 
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       BACKEND_IMAGE: ${{ secrets.BACKEND_IMAGE }}
       FRONTEND_IMAGE: ${{ secrets.FRONTEND_IMAGE }}
-      EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+      IMAGE_TAG: ${{ github.sha }}
+      ECS_CLUSTER: aircraft-maintenance
+      BACKEND_SERVICE: aircraft-maintenance-backend
+      FRONTEND_SERVICE: aircraft-maintenance-frontend
+      BACKEND_TASK_FAMILY: aircraft-maintenance-backend
+      FRONTEND_TASK_FAMILY: aircraft-maintenance-frontend
+      BACKEND_CONTAINER: maintenance-backend
+      FRONTEND_CONTAINER: maintenance-frontend
 
     steps:
-
-      # ----------------------------------------------------
-      # Checkout Repository
-      # ----------------------------------------------------
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------
-      # Configure AWS Credentials
-      # ----------------------------------------------------
-
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
-
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ----------------------------------------------------
-      # Login to Amazon ECR
-      # ----------------------------------------------------
-
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ----------------------------------------------------
-      # Build Backend Docker Image
-      # ----------------------------------------------------
-
-      - name: Build Backend Image
+      - name: Build and Push Backend Image
+        id: backend-image
         run: |
           docker build \
-          -t maintenance-backend \
-          ./backend
+            -t $BACKEND_IMAGE:$IMAGE_TAG \
+            -t $BACKEND_IMAGE:latest \
+            ./backend
+          docker push --all-tags $BACKEND_IMAGE
+          echo "image=$BACKEND_IMAGE:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # ----------------------------------------------------
-      # Tag Backend Image
-      # ----------------------------------------------------
-
-      - name: Tag Backend Image
-        run: |
-          docker tag maintenance-backend:latest $BACKEND_IMAGE
-
-      # ----------------------------------------------------
-      # Push Backend Image
-      # ----------------------------------------------------
-
-      - name: Push Backend Image
-        run: |
-          docker push $BACKEND_IMAGE
-
-      # ----------------------------------------------------
-      # Build Frontend Docker Image
-      # ----------------------------------------------------
-
-      - name: Build Frontend Image
+      - name: Build and Push Frontend Image
+        id: frontend-image
         run: |
           docker build \
-          -t maintenance-frontend \
-          ./frontend
+            -t $FRONTEND_IMAGE:$IMAGE_TAG \
+            -t $FRONTEND_IMAGE:latest \
+            ./frontend
+          docker push --all-tags $FRONTEND_IMAGE
+          echo "image=$FRONTEND_IMAGE:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # ----------------------------------------------------
-      # Tag Frontend Image
-      # ----------------------------------------------------
-
-      - name: Tag Frontend Image
+      - name: Download Task Definitions
         run: |
-          docker tag maintenance-frontend:latest $FRONTEND_IMAGE
+          aws ecs describe-task-definition \
+            --task-definition $BACKEND_TASK_FAMILY \
+            --query taskDefinition > backend-task-def.json
+          aws ecs describe-task-definition \
+            --task-definition $FRONTEND_TASK_FAMILY \
+            --query taskDefinition > frontend-task-def.json
 
-      # ----------------------------------------------------
-      # Push Frontend Image
-      # ----------------------------------------------------
+      - name: Render Backend Task Definition
+        id: backend-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: backend-task-def.json
+          container-name: ${{ env.BACKEND_CONTAINER }}
+          image: ${{ steps.backend-image.outputs.image }}
 
-      - name: Push Frontend Image
+      - name: Render Frontend Task Definition
+        id: frontend-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: frontend-task-def.json
+          container-name: ${{ env.FRONTEND_CONTAINER }}
+          image: ${{ steps.frontend-image.outputs.image }}
+
+      - name: Deploy Backend to ECS Fargate
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.backend-task-def.outputs.task-definition }}
+          service: ${{ env.BACKEND_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Deploy Frontend to ECS Fargate
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.frontend-task-def.outputs.task-definition }}
+          service: ${{ env.FRONTEND_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Verify Services
         run: |
-          docker push $FRONTEND_IMAGE
-
-      # ----------------------------------------------------
-      # Configure kubectl
-      # ----------------------------------------------------
-
-      - name: Configure kubectl
-        run: |
-          aws eks update-kubeconfig \
-          --region $AWS_REGION \
-          --name $EKS_CLUSTER_NAME
-
-      # ----------------------------------------------------
-      # Replace Backend Image
-      # ----------------------------------------------------
-
-      - name: Update Backend Manifest
-        run: |
-          sed -i "s|\${BACKEND_IMAGE}|$BACKEND_IMAGE|g" kubernetes/backend-deployment.yaml
-
-      # ----------------------------------------------------
-      # Replace Frontend Image
-      # ----------------------------------------------------
-
-      - name: Update Frontend Manifest
-        run: |
-          sed -i "s|\${FRONTEND_IMAGE}|$FRONTEND_IMAGE|g" kubernetes/frontend-deployment.yaml
-
-      # ----------------------------------------------------
-      # Create / Update Kubernetes Secret
-      # ----------------------------------------------------
-
-      - name: Create AWS Credentials Secret
-        run: |
-          kubectl create secret generic aws-credentials \
-            --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            --from-literal=AWS_REGION=${{ secrets.AWS_REGION }} \
-            --dry-run=client -o yaml | kubectl apply -f -
-            
-      # ----------------------------------------------------
-      # Deploy Kubernetes Resources
-      # ----------------------------------------------------
-
-      - name: Deploy to Amazon EKS
-        run: |
-          kubectl apply -f kubernetes/
-
-      # ----------------------------------------------------
-      # Verify Deployment
-      # ----------------------------------------------------
-
-      - name: Wait for Backend
-        run: |
-          kubectl rollout status deployment/maintenance-backend
-
-      - name: Wait for Frontend
-        run: |
-          kubectl rollout status deployment/maintenance-frontend
-
-      # ----------------------------------------------------
-      # Verify Pods
-      # ----------------------------------------------------
-
-      - name: List Resources
-        run: |
-          kubectl get deployments
-          kubectl get pods
-          kubectl get svc
+          aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $BACKEND_SERVICE $FRONTEND_SERVICE \
+            --query "services[].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount,TaskDef:taskDefinition}" \
+            --output table
