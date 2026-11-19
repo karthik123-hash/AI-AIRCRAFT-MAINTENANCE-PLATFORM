@@ -1,4 +1,5 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/$/, '');
+
 async function request(path, options = {}) {
   const url = `${API_BASE_URL}${path}`;
 
@@ -28,11 +29,7 @@ async function request(path, options = {}) {
 }
 
 export async function healthCheck() {
-  try {
-    return await request('/');
-  } catch (error) {
-    return request('/testing/health');
-  }
+  return request('/testing/health');
 }
 
 export async function uploadAnalyticsFile(file) {
